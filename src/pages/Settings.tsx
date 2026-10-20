@@ -1,9 +1,11 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Bell,
   CheckCircle2,
+  Code,
   Eye,
   Gauge,
+  Rows3,
   RefreshCw,
   Settings as SettingsIcon,
   Sliders,
@@ -21,6 +23,8 @@ import {
   playTestTone,
 } from '../utils/audioController';
 import NetworkBadge from '../components/NetworkBadge';
+import DevSettingsDrawer from '../components/DevSettingsDrawer';
+import { SHOW_DEV_SETTINGS } from '../lib/stellarConfig';
 import { useReducedMotion } from '../hooks/useReducedMotion';
 
 function cx(...classes: Array<string | false | null | undefined>) {
@@ -125,12 +129,16 @@ export default function Settings() {
   const soundEnabled = useSettingsStore((s) => s.soundEnabled);
   const streamerMode = useSettingsStore((s) => s.streamerMode);
   const motionPreference = useSettingsStore((s) => s.motionPreference);
+  const compactMode = useSettingsStore((s) => s.compactMode);
 
   const setShowNetworkBadge = useSettingsStore((s) => s.setShowNetworkBadge);
   const setSoundEnabled = useSettingsStore((s) => s.setSoundEnabled);
   const setStreamerMode = useSettingsStore((s) => s.setStreamerMode);
   const setMotionPreference = useSettingsStore((s) => s.setMotionPreference);
+  const setCompactMode = useSettingsStore((s) => s.setCompactMode);
   const resetToDefaults = useSettingsStore((s) => s.resetToDefaults);
+
+  const [isDevDrawerOpen, setIsDevDrawerOpen] = useState(false);
 
   const { reduced, systemPreference, override } = useReducedMotion();
 
@@ -145,8 +153,9 @@ export default function Settings() {
       showNetworkBadge !== DEFAULT_SETTINGS.showNetworkBadge ||
       soundEnabled !== DEFAULT_SETTINGS.soundEnabled ||
       streamerMode !== DEFAULT_SETTINGS.streamerMode ||
+      compactMode !== DEFAULT_SETTINGS.compactMode ||
       motionPreference !== DEFAULT_SETTINGS.motionPreference,
-    [showNetworkBadge, soundEnabled, streamerMode, motionPreference],
+    [showNetworkBadge, soundEnabled, streamerMode, motionPreference, compactMode],
   );
 
   const handleReset = () => {
@@ -289,6 +298,39 @@ export default function Settings() {
                 : 'The badge is hidden — only your wallet controls show in the navbar.'}
             </span>
           </div>
+        </section>
+
+        {/* Dashboard density */}
+        <section
+          aria-labelledby="settings-density-heading"
+          className="glass-card mb-6 rounded-xl p-6 sm:p-8"
+          data-testid="settings-section-density"
+        >
+          <header className="mb-6 flex items-center gap-3">
+            <div
+              className="flex h-10 w-10 items-center justify-center rounded-lg bg-[#22D3EE]/15 text-[#22D3EE]"
+              aria-hidden
+            >
+              <Rows3 className="h-5 w-5" />
+            </div>
+            <div>
+              <h2 id="settings-density-heading" className="text-lg font-bold text-white">
+                Dashboard density
+              </h2>
+              <p className="text-xs text-gray-500">
+                Choose between a comfortable or compact dashboard layout.
+              </p>
+            </div>
+          </header>
+
+          <ToggleRow
+            title="Compact dashboard"
+            description="Reduce padding and spacing on the dashboard, most noticeable on narrow phone screens."
+            icon={<Rows3 className="h-5 w-5" />}
+            checked={compactMode}
+            onToggle={() => setCompactMode(!compactMode)}
+            testId="settings-toggle-compact"
+          />
         </section>
 
         {/* Sound */}
@@ -472,6 +514,50 @@ export default function Settings() {
             Use these controls only if you want to override that.
           </p>
         </section>
+
+        {/* Developer settings (dev/testnet only) */}
+        {SHOW_DEV_SETTINGS && (
+          <section
+            aria-labelledby="settings-dev-heading"
+            className="glass-card mb-6 rounded-xl p-6 sm:p-8"
+            data-testid="settings-section-dev"
+          >
+            <header className="mb-6 flex items-center gap-3">
+              <div
+                className="flex h-10 w-10 items-center justify-center rounded-lg bg-[#22D3EE]/10 text-[#22D3EE]"
+                aria-hidden
+              >
+                <Code className="h-5 w-5" />
+              </div>
+              <div>
+                <h2
+                  id="settings-dev-heading"
+                  className="text-lg font-bold text-white"
+                >
+                  Developer
+                </h2>
+                <p className="text-xs text-gray-500">
+                  Inspect the on-chain configuration this build is connected to.
+                </p>
+              </div>
+            </header>
+
+            <button
+              type="button"
+              onClick={() => setIsDevDrawerOpen(true)}
+              className="btn-ghost inline-flex items-center gap-2 rounded-lg px-5 py-3 text-sm font-bold"
+              data-testid="settings-open-dev-drawer"
+            >
+              <Code className="h-4 w-4" aria-hidden />
+              View contract config
+            </button>
+          </section>
+        )}
+
+        <DevSettingsDrawer
+          isOpen={isDevDrawerOpen}
+          onClose={() => setIsDevDrawerOpen(false)}
+        />
 
         {/* Footer note */}
         <p className="mt-2 text-center text-xs text-gray-500">

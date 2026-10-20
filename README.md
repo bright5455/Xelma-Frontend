@@ -10,6 +10,7 @@ application built with Vite, Tailwind CSS, Zustand, and Socket.IO.
 - **Backend repo:** https://github.com/TevaLabs/Xelma-Backend
 - **Issue tracker:** https://github.com/TevaLabs/Xelma-Frontend/issues
 - **Design reference:** [Figma – Xelma](https://www.figma.com/design/HQp2j9epTTKq6vggiGQRzl/Untitled?node-id=22-685&p=f&t=FZBmcBq74PBjmbF1-0)
+- **Contributing:** see [CONTRIBUTING.md](./CONTRIBUTING.md) for local setup, the Stellar Wave contributor rebuild workflow, and the PR checklist.
 
 
 ---
@@ -26,6 +27,7 @@ application built with Vite, Tailwind CSS, Zustand, and Socket.IO.
 - [Localization](#localization)
 - [Testing](#testing)
 - [React Compiler / ESLint notes](#react-compiler--eslint-notes)
+- [Contributing](./CONTRIBUTING.md)
 
 ---
 
@@ -77,6 +79,8 @@ The app boots on [http://localhost:5173](http://localhost:5173). During developm
 proxies `/api` and `/socket.io` to `http://localhost:3000` (configure via
 [`vite.config.ts`](./vite.config.ts) and [`src/lib/config.ts`](./src/lib/config.ts)).
 
+> 💡 **Freighter-less Demo:** Newcomers can demo the full UI, wallet connection, placing bets, and claiming rewards in <15 minutes without installing the Freighter browser extension. See [`docs/freighter-less-fixtures.md`](./docs/freighter-less-fixtures.md).
+
 ---
 
 ## Available scripts
@@ -111,6 +115,8 @@ bundle.
 | `VITE_STELLAR_HORIZON_URL`        | optional | `src/lib/horizon.ts`          | Derived from `VITE_STELLAR_NETWORK`                       | Horizon endpoint for account balances and trustlines. Defaults to `horizon-testnet.stellar.org`, or `horizon.stellar.org` on `PUBLIC`/`MAINNET`. Set only to override. |
 | `VITE_STELLAR_FRIENDBOT_URL`      | optional | `src/lib/friendbot.ts`        | `https://friendbot.stellar.org`                           | Testnet faucet used by the "Fund with Friendbot" CTA. Ignored on `PUBLIC`/`MAINNET`, where the CTA is hidden. |
 | `VITE_XELMA_CONTRACT_ID`          | ✅ prod  | `src/lib/xelma-contract.ts`   | Testnet placeholder contract id                           | Deployed Xelma Soroban contract id (`C…`) for the target network.       |
+| `VITE_ENABLE_MSW`                 | optional | `src/main.tsx`                | unset                                                     | Dev only. `true` serves education/stats/pools from MSW fixtures (see [Mock API](#mock-api-msw)). |
+| `VITE_MSW_SCENARIO`               | optional | `src/test/msw/browser.ts`     | unset                                                     | `error` makes every mocked endpoint fail (requires `VITE_ENABLE_MSW`). |
 
 ### `.env` examples
 
@@ -242,11 +248,7 @@ in order — they're ordered from most → least likely.
 
 Frontend features depend on backend endpoints contractually. Issue
 [`#152` — Document backend dependency matrix for frontend features](https://github.com/TevaLabs/Xelma-Frontend/issues/152)
-tracks a single source-of-truth doc that lives next to this README. Until that
-lands, treat the API paths called out in [`src/lib/api.ts`](./src/lib/api.ts) and the
-backend repo's OpenAPI spec as the working contract. If a frontend feature ships
-against an endpoint the backend doesn't expose (or vice versa), update both sides
-in the same PR rather than relying on tribal knowledge.
+is documented in [`docs/BACKEND_DEPENDENCIES.md`](./docs/BACKEND_DEPENDENCIES.md), which serves as the single source of truth for endpoint dependencies, real-time WebSocket events, graceful degradation behavior, and mock availability across all feature areas. If a frontend feature ships against an endpoint the backend doesn't expose (or vice versa), update both sides in the same PR rather than relying on tribal knowledge.
 
 ---
 
@@ -290,9 +292,9 @@ price chart, the round lifecycle timeline, round-update connection status, the
 end-round modal, and opt-in community chat (toggled from the dashboard header so
 the default terminal stays uncluttered).
 
-`/play` is **deprecated** and permanently redirects to `/dashboard`. The
-`LegacyDashboard` component is retained only for reference and is no longer
-routed. Chat and notifications are available via the in-dashboard toggle; further
+`/play` is **deprecated** and permanently redirects to `/dashboard`. The former
+`LegacyDashboard` page has been removed — `/dashboard` is the single dashboard
+story. Chat and notifications are available via the in-dashboard toggle; further
 social/notification consolidation is tracked in issue
 [#130](https://github.com/TevaLabs/Xelma-Frontend/issues/130).
 
@@ -325,6 +327,37 @@ Run the full CI gate (lint + build + tests):
 ```bash
 pnpm test
 ```
+
+### Mock API (MSW)
+
+Fixtures and handlers for the education, stats and pools endpoints live in
+`src/test/msw/` (`fixtures.ts`, `handlers.ts`). Each endpoint has a happy-path handler
+(`handlers`) and an error handler (`errorHandlers`).
+
+**In unit tests** — opt in per file:
+
+```ts
+import { server } from '../test/msw/server';
+import { errorHandlers } from '../test/msw/handlers';
+
+beforeAll(() => server.listen({ onUnhandledRequest: 'bypass' }));
+afterEach(() => server.resetHandlers());
+afterAll(() => server.close());
+
+// inside a test: force the error path
+server.use(...errorHandlers.pools);
+```
+
+**In the browser** — run Learn, Dashboard and Pools with no backend:
+
+```bash
+npx msw init public/ --save   # one-time: generates public/mockServiceWorker.js
+echo "VITE_ENABLE_MSW=true" >> .env.local
+pnpm dev
+```
+
+Set `VITE_MSW_SCENARIO=error` alongside it to make every mocked endpoint return a 500.
+The worker only starts in dev builds and is off unless `VITE_ENABLE_MSW=true`.
 
 ### Accessibility smoke tests
 

@@ -55,6 +55,16 @@ describe('RecentActivity', () => {
       expect(updownLabels).toHaveLength(2);
       expect(screen.getByText('precision')).toBeInTheDocument();
     });
+
+    it('renders formatted relative timestamps when provided', () => {
+      const itemsWithTime: RecentActivityItem[] = [
+        { id: '1', asset: 'BTC', result: 'Won', amount: 10, mode: 'updown', timestamp: new Date(Date.now() - 5 * 60 * 1000) },
+        { id: '2', asset: 'ETH', result: 'Lost', amount: 5, mode: 'precision', timestamp: new Date(Date.now() - 2 * 60 * 60 * 1000) },
+      ];
+      render(<RecentActivity items={itemsWithTime} />);
+      expect(screen.getByText(/5m ago/)).toBeInTheDocument();
+      expect(screen.getByText(/2h ago/)).toBeInTheDocument();
+    });
   });
 
   describe('empty state', () => {
@@ -105,7 +115,7 @@ describe('RecentActivity', () => {
 
     it('filters to show only correct (Won) items when "correct" is selected', () => {
       render(<RecentActivity items={mockItems} />);
-      fireEvent.click(screen.getByRole('tab', { name: 'correct' }));
+      fireEvent.click(screen.getByRole('tab', { name: /^correct/i }));
       expect(screen.getAllByRole('listitem')).toHaveLength(2);
       expect(screen.getByText('BTC')).toBeInTheDocument();
       expect(screen.getByText('XLM')).toBeInTheDocument();
@@ -114,7 +124,7 @@ describe('RecentActivity', () => {
 
     it('filters to show only incorrect (Lost) items when "incorrect" is selected', () => {
       render(<RecentActivity items={mockItems} />);
-      fireEvent.click(screen.getByRole('tab', { name: 'incorrect' }));
+      fireEvent.click(screen.getByRole('tab', { name: /^incorrect/i }));
       expect(screen.getAllByRole('listitem')).toHaveLength(1);
       expect(screen.getByText('ETH')).toBeInTheDocument();
       expect(screen.queryByText('BTC')).not.toBeInTheDocument();
@@ -126,16 +136,58 @@ describe('RecentActivity', () => {
         { id: '1', asset: 'BTC', result: 'Won', amount: 10, mode: 'updown' },
       ];
       render(<RecentActivity items={allWon} />);
-      fireEvent.click(screen.getByRole('tab', { name: 'incorrect' }));
+      fireEvent.click(screen.getByRole('tab', { name: /^incorrect/i }));
       expect(screen.getByText(/no incorrect predictions yet/i)).toBeInTheDocument();
       expect(screen.queryByRole('list')).not.toBeInTheDocument();
     });
 
     it('shows default empty message when items array is empty regardless of filter', () => {
       render(<RecentActivity items={[]} />);
-      fireEvent.click(screen.getByRole('tab', { name: 'correct' }));
+      fireEvent.click(screen.getByRole('tab', { name: /^correct/i }));
       expect(screen.getByText(/no predictions yet/i)).toBeInTheDocument();
       expect(screen.queryByRole('list')).not.toBeInTheDocument();
+    });
+  });
+
+  describe('filter count badges', () => {
+    it('shows counts reflecting all/correct/incorrect totals', () => {
+      render(<RecentActivity items={mockItems} />);
+      const tabs = screen.getAllByRole('tab');
+      // mockItems: 2 Won, 1 Lost, 3 total
+      expect(tabs[0]).toHaveAccessibleName('All (3)');
+      expect(tabs[1]).toHaveAccessibleName('Correct (2)');
+      expect(tabs[2]).toHaveAccessibleName('Incorrect (1)');
+    });
+
+    it('shows zero counts on every chip when items array is empty', () => {
+      render(<RecentActivity items={[]} />);
+      const tabs = screen.getAllByRole('tab');
+      expect(tabs[0]).toHaveAccessibleName('All (0)');
+      expect(tabs[1]).toHaveAccessibleName('Correct (0)');
+      expect(tabs[2]).toHaveAccessibleName('Incorrect (0)');
+    });
+
+    it('does not exclude Pending or Failed items from the "all" count', () => {
+      const mixed: RecentActivityItem[] = [
+        ...mockItems,
+        { id: '4', asset: 'XLM', result: 'Pending', amount: 8, mode: 'updown' },
+        { id: '5', asset: 'BTC', result: 'Failed', amount: 3, mode: 'precision' },
+      ];
+      render(<RecentActivity items={mixed} />);
+      const tabs = screen.getAllByRole('tab');
+      expect(tabs[0]).toHaveAccessibleName('All (5)');
+      // Correct/incorrect totals stay based on Won/Lost only
+      expect(tabs[1]).toHaveAccessibleName('Correct (2)');
+      expect(tabs[2]).toHaveAccessibleName('Incorrect (1)');
+    });
+
+    it('keeps counts stable across filter switches (counts reflect totals, not the active filter)', () => {
+      render(<RecentActivity items={mockItems} />);
+      fireEvent.click(screen.getByRole('tab', { name: /^incorrect/i }));
+      const tabs = screen.getAllByRole('tab');
+      expect(tabs[0]).toHaveAccessibleName('All (3)');
+      expect(tabs[1]).toHaveAccessibleName('Correct (2)');
+      expect(tabs[2]).toHaveAccessibleName('Incorrect (1)');
     });
   });
 
