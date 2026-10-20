@@ -19,6 +19,7 @@ import { LoadingState, ErrorState } from "./ui/StatusStates";
 import { PanelHeader } from "./ui/PanelHeader";
 import { useConnectionStatus } from "../hooks/useConnectionStatus";
 import { ConnectionStatus } from "./ConnectionStatus";
+import { useReducedMotion } from "../hooks/useReducedMotion";
 
 interface PriceChartProps {
   height?: number;
@@ -136,6 +137,7 @@ const PriceChart = ({ height = 300, asset = "XLM", entryPrice, onPriceUpdate }: 
   const [loadError, setLoadError] = useState<string | null>(null);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
   const [chartMode, setChartMode] = useState<ChartMode>(getStoredChartMode);
+  const { reduced: prefersReducedMotion } = useReducedMotion();
 
   // y-coordinate of the last data point for the badge
   const [badgeY, setBadgeY] = useState<number | null>(null);
@@ -143,6 +145,10 @@ const PriceChart = ({ height = 300, asset = "XLM", entryPrice, onPriceUpdate }: 
   const [entryY, setEntryY] = useState<number | null>(null);
   // y-coordinates for each price label
   const [labelYs, setLabelYs] = useState<number[]>([]);
+
+  // Accessibility: Screen reader announcements
+  const [announcement, setAnnouncement] = useState("");
+  const lastAnnouncedRef = useRef<{ price: number, time: number } | null>(null);
 
   // Asset-aware styling (hoisted for use in effects below)
   const lineColor = ASSET_COLORS[asset] ?? "#FFFFFF";
@@ -177,6 +183,37 @@ const PriceChart = ({ height = 300, asset = "XLM", entryPrice, onPriceUpdate }: 
   const priceChangePercent = firstPrice !== 0 ? (priceChange / firstPrice) * 100 : 0;
   const isPositive = priceChange >= 0;
   const hasData = data.length > 0;
+
+  useEffect(() => {
+    if (!latestPrice || !hasData) return;
+    const now = Date.now();
+    const last = lastAnnouncedRef.current;
+    
+    const THROTTLE_MS = 5000; // 5 seconds
+    const MATERIAL_PCT = 0.001; // 0.1% change is material
+
+    let shouldAnnounce = false;
+    let directionText = "";
+
+    if (!last) {
+      shouldAnnounce = true;
+    } else {
+      const timePassed = (now - last.time) >= THROTTLE_MS;
+      const pctChange = Math.abs((latestPrice - last.price) / last.price);
+      
+      if (timePassed || pctChange >= MATERIAL_PCT) {
+        if (latestPrice !== last.price) {
+          shouldAnnounce = true;
+          directionText = latestPrice > last.price ? "increased to" : "decreased to";
+        }
+      }
+    }
+
+    if (shouldAnnounce) {
+      setAnnouncement(`${asset} price ${directionText ? directionText : 'is'} $${latestPrice.toFixed(4)}`);
+      lastAnnouncedRef.current = { price: latestPrice, time: now };
+    }
+  }, [latestPrice, asset, hasData]);
 
   useEffect(() => {
     if (!chartContainerRef.current) return;
@@ -487,7 +524,7 @@ const PriceChart = ({ height = 300, asset = "XLM", entryPrice, onPriceUpdate }: 
 
   // Reload data when asset changes — reset and load mock/API data
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+    // Reset and refresh chart state when the selected asset changes.
     setData([]);
     setIsLoading(true);
     setLoadError(null);
@@ -499,10 +536,24 @@ const PriceChart = ({ height = 300, asset = "XLM", entryPrice, onPriceUpdate }: 
       setLastUpdatedAt(new Date());
       setIsLoading(false);
     }
+    const timer = setTimeout(() => {
+      setData([]);
+      setIsLoading(true);
+      setLoadError(null);
 
-    // Also attempt to fetch live data from API
-    void loadInitialPrices();
-  }, [asset]); // eslint-disable-line react-hooks/exhaustive-deps
+      // Use mock data directly for instant visual feedback per asset
+      const mockData = mockPriceData[asset];
+      if (mockData && mockData.length > 0) {
+        setData(mockData);
+        setLastUpdatedAt(new Date());
+        setIsLoading(false);
+      }
+
+      // Also attempt to fetch live data from API
+      void loadInitialPrices();
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [asset, loadInitialPrices]);
 
   // Update chart line color when asset changes
   useEffect(() => {
@@ -581,12 +632,17 @@ const PriceChart = ({ height = 300, asset = "XLM", entryPrice, onPriceUpdate }: 
             <button
               type="button"
               onClick={toggleChartMode}
-              className="relative flex items-center rounded-full bg-[#1e3a5f]/60 p-0.5 text-xs font-medium transition-colors hover:bg-[#1e3a5f]/80"
+              aria-pressed={chartMode === "candlestick"}
+              className={`relative flex items-center rounded-full bg-[#1e3a5f]/60 p-0.5 text-xs font-medium hover:bg-[#1e3a5f]/80 ${
+                prefersReducedMotion ? "transition-none" : "transition-colors"
+              }`}
               title={chartMode === "line" ? "Switch to candlestick chart" : "Switch to line chart"}
               aria-label={chartMode === "line" ? "Switch to candlestick chart" : "Switch to line chart"}
             >
               <span
-                className={`px-2.5 py-1 rounded-full transition-all duration-200 ${chartMode === "line" ? "bg-white text-[#0a1929] shadow-sm" : "text-white/70 hover:text-white"}`}
+                className={`px-2.5 py-1 rounded-full ${
+                  prefersReducedMotion ? "transition-none" : "transition-all duration-200"
+                } ${chartMode === "line" ? "bg-white text-[#0a1929] shadow-sm" : "text-white/70 hover:text-white"}`}
               >
                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="inline-block mr-1">
                   <path d="M1 13L4 8L7 10L10 3L13 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
@@ -594,7 +650,9 @@ const PriceChart = ({ height = 300, asset = "XLM", entryPrice, onPriceUpdate }: 
                 Line
               </span>
               <span
-                className={`px-2.5 py-1 rounded-full transition-all duration-200 ${chartMode === "candlestick" ? "bg-white text-[#0a1929] shadow-sm" : "text-white/70 hover:text-white"}`}
+                className={`px-2.5 py-1 rounded-full ${
+                  prefersReducedMotion ? "transition-none" : "transition-all duration-200"
+                } ${chartMode === "candlestick" ? "bg-white text-[#0a1929] shadow-sm" : "text-white/70 hover:text-white"}`}
               >
                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="inline-block mr-1">
                   <rect x="2" y="5" width="3" height="7" rx="0.5" fill="currentColor"/>
@@ -638,7 +696,12 @@ const PriceChart = ({ height = 300, asset = "XLM", entryPrice, onPriceUpdate }: 
             }}
           />
           {/* Chart — leaves space on the right so line terminates exactly at the badge */}
-          <div ref={chartContainerRef} className="absolute inset-y-0 left-0 right-[105px]" />
+          <div 
+            ref={chartContainerRef} 
+            className="absolute inset-y-0 left-0 right-[105px]" 
+            role="img" 
+            aria-label={`${asset} Price Chart`} 
+          />
 
           {/* Custom price labels on the right */}
           <div className="pointer-events-none absolute top-0 right-0 h-full w-[105px] flex flex-col">
@@ -739,6 +802,11 @@ const PriceChart = ({ height = 300, asset = "XLM", entryPrice, onPriceUpdate }: 
       <div className="flex items-center justify-between mt-3 px-2 text-xs text-gray-400 dark:text-gray-500">
         <span>Last update: {lastUpdatedAt ? lastUpdatedAt.toLocaleTimeString() : "Waiting for live data"}</span>
         <span>Live market feed</span>
+      </div>
+
+      {/* Visually hidden aria-live region for price announcements */}
+      <div className="sr-only" aria-live="polite" aria-atomic="true">
+        {announcement}
       </div>
     </div>
   );

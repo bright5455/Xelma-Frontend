@@ -1,5 +1,7 @@
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act, within } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import '../i18n';
+import i18n from '../i18n';
 
 // Configurable search params for testing deep-linking
 let mockSearchParams = new URLSearchParams();
@@ -50,6 +52,8 @@ vi.mock('react-router-dom', () => ({
 import { useRoundStore } from '../store/useRoundStore';
 import { useWalletStore } from '../store/useWalletStore';
 import { predictionsApi, ApiError, educationApi, statsApi } from '../lib/api-client';
+import { useSettingsStore, DEFAULT_SETTINGS } from '../store/useSettingsStore';
+import { bindSoundPreference, playRoundResolutionCue } from '../utils/audioController';
 import Dashboard from './Dashboard';
 
 
@@ -69,6 +73,7 @@ const mockRoundStore = {
 const mockWalletStore = {
   status: 'connected' as const,
   publicKey: 'GTEST123',
+  connect: vi.fn(),
 };
 
 // Mock the stores with proper Zustand-like behavior
@@ -215,10 +220,27 @@ vi.mock('../components/EndRoundModal', () => ({
 }));
 
 vi.mock('../components/BetModal', () => ({
-  default: ({ isOpen, onClose, onSuccess }: any) => (
+  default: ({ isOpen, onClose, onSuccess, onPending, onPredictionError }: any) => (
     <div data-testid="bet-modal" data-open={isOpen}>
       <button onClick={onClose} data-testid="close-bet-modal">Close</button>
       <button onClick={() => onSuccess('tx-123')} data-testid="success-bet-modal">Success</button>
+      <button
+        onClick={() =>
+          onPending?.({
+            id: 'optimistic-1',
+            asset: 'BTC',
+            mode: 'updown',
+            stake: 10,
+            status: 'PENDING',
+          })
+        }
+        data-testid="pending-bet-modal"
+      >
+        Pending
+      </button>
+      <button onClick={() => onPredictionError?.()} data-testid="error-bet-modal">
+        Error
+      </button>
     </div>
   ),
 }));
@@ -228,6 +250,12 @@ vi.mock('../components/CountdownTimer', () => ({
   default: ({ endTime }: { endTime: Date }) => (
     <span data-testid="countdown-timer">{endTime.toISOString()}</span>
   ),
+}));
+
+vi.mock('../utils/audioController', () => ({
+  bindSoundPreference: vi.fn(),
+  clearSoundPreferenceBinding: vi.fn(),
+  playRoundResolutionCue: vi.fn(),
 }));
 
 
@@ -257,11 +285,33 @@ describe('Dashboard', () => {
     Object.assign(mockWalletStore, {
       status: 'connected',
       publicKey: 'GTEST123',
+      connect: vi.fn(),
+    });
+
+    localStorage.clear();
+    useSettingsStore.setState({ ...DEFAULT_SETTINGS });
+
+    // vi.resetAllMocks() above clears the global window.matchMedia
+    // implementation from src/test/setup.ts — re-establish it so
+    // useReducedMotion() (used by the deep-linked RoundCard scroll effect)
+    // doesn't crash on `.matches` of undefined.
+    Object.defineProperty(window, 'matchMedia', {
+      writable: true,
+      value: vi.fn().mockImplementation((query: string) => ({
+        matches: false,
+        media: query,
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })),
     });
   });
 
-  afterEach(() => {
-    // no-op
+  afterEach(async () => {
+    await i18n.changeLanguage('en');
   });
 
   describe('rendering', () => {
@@ -294,7 +344,147 @@ describe('Dashboard', () => {
       render(<Dashboard />);
 
       expect(screen.getByTestId('share-rounds-btn')).toBeInTheDocument();
-      expect(screen.getByText('Share')).toBeInTheDocument();
+      expect(screen.getByTestId('share-rounds-btn')).toHaveTextContent(/Share|dashboard\.share\.button/i);
+    });
+  });
+
+  describe('spectate mode (wallet disconnected)', () => {
+    const disconnect = () =>
+      vi.mocked(useWalletStore).mockImplementation(((selector: unknown) => {
+        const store = { ...mockWalletStore, status: 'idle', publicKey: null };
+        return selectFromStore(selector, store);
+      }) as never);
+
+    it('renders the spectate card with a Connect CTA routed to /connect', () => {
+      disconnect();
+      render(<Dashboard />);
+
+      expect(screen.getByTestId('spectate-card')).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: /spectate mode/i })).toBeInTheDocument();
+      expect(screen.getByTestId('dashboard-connect-now')).toHaveAttribute('href', '/connect');
+    });
+
+    it('keeps the chart, timeline and rounds visible', () => {
+      disconnect();
+      render(<Dashboard />);
+
+      expect(screen.getByTestId('price-chart')).toBeInTheDocument();
+      expect(screen.getAllByTestId('round-card').length).toBeGreaterThan(0);
+    });
+
+    it('replaces round submit buttons with Connect CTAs', () => {
+      disconnect();
+      render(<Dashboard />);
+
+      expect(screen.queryByTestId('round-card-submit')).not.toBeInTheDocument();
+      const ctas = screen.getAllByTestId('round-card-connect');
+      expect(ctas.length).toBeGreaterThan(0);
+      expect(ctas[0]).toHaveAttribute('href', '/connect');
+      expect(screen.getByTestId('mobile-connect-cta')).toHaveAttribute('href', '/connect');
+    });
+
+    it('does not open the bet modal when a spectator triggers a prediction', () => {
+      disconnect();
+      render(<Dashboard />);
+
+      fireEvent.click(screen.getByTestId('submit-prediction'));
+      expect(screen.getByTestId('bet-modal')).toHaveAttribute('data-open', 'false');
+    });
+
+    it('shows the spectate card and chart separately from the empty-rounds state', () => {
+      disconnect();
+      vi.mocked(useRoundStore).mockImplementation((selector: any) => {
+        const store = { ...mockRoundStore, isRoundActive: false };
+        return typeof selector === 'function' ? selector(store) : store;
+      });
+      render(<Dashboard />);
+
+      expect(screen.getByTestId('spectate-card')).toBeInTheDocument();
+      expect(screen.getByTestId('spectate-chart')).toBeInTheDocument();
+      expect(screen.getByText(/no active rounds/i)).toBeInTheDocument();
+    });
+
+    it('does not show the spectate card when the wallet is connected', () => {
+      render(<Dashboard />);
+
+      expect(screen.queryByTestId('spectate-card')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('mobile-connect-cta')).not.toBeInTheDocument();
+    });
+  });
+
+  describe('density toggle', () => {
+    it('defaults to comfortable density', () => {
+      render(<Dashboard />);
+
+      expect(screen.getByRole('main')).toHaveAttribute('data-density', 'comfortable');
+      expect(screen.getByTestId('density-toggle')).toHaveAttribute('aria-pressed', 'false');
+    });
+
+    it('switches to compact and updates the shared settings store', () => {
+      render(<Dashboard />);
+
+      fireEvent.click(screen.getByTestId('density-toggle'));
+
+      expect(screen.getByRole('main')).toHaveAttribute('data-density', 'compact');
+      expect(useSettingsStore.getState().compactMode).toBe(true);
+    });
+
+    it('reflects a compact preference set from Settings', () => {
+      useSettingsStore.setState({ compactMode: true });
+      render(<Dashboard />);
+
+      expect(screen.getByRole('main')).toHaveAttribute('data-density', 'compact');
+      expect(screen.getByTestId('density-toggle')).toHaveAttribute('aria-pressed', 'true');
+    });
+  });
+
+  describe('mode toggle & persistence', () => {
+    it('renders mode toggle on the dashboard header', () => {
+      render(<Dashboard />);
+
+      const toggle = screen.getByTestId('dashboard-mode-toggle');
+      expect(toggle).toBeInTheDocument();
+      expect(screen.getByTestId('mode-practice-btn')).toHaveAttribute('aria-checked', 'true');
+      expect(screen.getByTestId('practice-risk-free-label')).toHaveTextContent(
+        'virtual xLM, no on-chain risk'
+      );
+    });
+
+    it('persists selected mode in localStorage when switched', () => {
+      render(<Dashboard />);
+
+      const onChainBtn = screen.getByTestId('mode-onchain-btn');
+      fireEvent.click(onChainBtn);
+
+      expect(localStorage.getItem('xelma_mode')).toBe('on-chain');
+      expect(onChainBtn).toHaveAttribute('aria-checked', 'true');
+    });
+
+    it('prompts wallet connection and remains in practice mode when clicking on-chain while disconnected', () => {
+      vi.mocked(useWalletStore).mockImplementation(((selector: unknown) => {
+        const store = { ...mockWalletStore, status: 'idle', publicKey: null };
+        return selectFromStore(selector, store);
+      }) as never);
+
+      render(<Dashboard />);
+
+      const onChainBtn = screen.getByTestId('mode-onchain-btn');
+      fireEvent.click(onChainBtn);
+
+      expect(mockWalletStore.connect).toHaveBeenCalledTimes(1);
+      expect(screen.getByTestId('mode-practice-btn')).toHaveAttribute('aria-checked', 'true');
+    });
+
+    it('opens the open positions drawer from the dashboard entry point', () => {
+      render(<Dashboard />);
+
+      fireEvent.click(screen.getByTestId('open-positions-trigger'));
+
+      expect(screen.getByRole('dialog', { name: /open positions/i })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'No open positions' })).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Close open positions' }));
+      expect(screen.queryByRole('dialog', { name: /open positions/i })).not.toBeInTheDocument();
     });
   });
 
@@ -340,6 +530,23 @@ describe('Dashboard', () => {
       const predictionCard = screen.getByTestId('prediction-card');
       expect(predictionCard).toHaveAttribute('data-connecting', 'true');
     });
+
+    it('mounts the profile summary panel when the wallet is connected', () => {
+      render(<Dashboard />);
+
+      expect(screen.getByLabelText('Your profile')).toBeInTheDocument();
+    });
+
+    it('omits the profile summary panel when the wallet is disconnected', () => {
+      vi.mocked(useWalletStore).mockImplementation(((selector: unknown) => {
+        const store = { ...mockWalletStore, status: 'idle', publicKey: null };
+        return selectFromStore(selector, store);
+      }) as never);
+
+      render(<Dashboard />);
+
+      expect(screen.queryByLabelText('Your profile')).not.toBeInTheDocument();
+    });
   });
 
   describe('round states', () => {
@@ -351,7 +558,7 @@ describe('Dashboard', () => {
 
       render(<Dashboard />);
 
-      expect(screen.getByText('No Active Rounds')).toBeInTheDocument();
+      expect(screen.getByText(/No Active Rounds|dashboard\.emptyState\.noActiveRounds\.title/i)).toBeInTheDocument();
       expect(screen.queryByTestId('prediction-card')).not.toBeInTheDocument();
     });
 
@@ -403,6 +610,60 @@ describe('Dashboard', () => {
     });
   });
 
+  describe('sound (unified with useSettingsStore)', () => {
+    const resolvedRound = {
+      id: 'round-123',
+      status: 'resolved',
+      isWin: true,
+      netChange: 42,
+      tip: 'Nice finish!',
+    };
+
+    function mockResolvedRound() {
+      vi.mocked(useRoundStore).mockImplementation((selector: any) => {
+        const store = { ...mockRoundStore, isRoundActive: false, resolvedRound };
+        return typeof selector === 'function' ? selector(store) : store;
+      });
+    }
+
+    it('binds the audio controller to the settings store on mount', () => {
+      render(<Dashboard />);
+      expect(bindSoundPreference).toHaveBeenCalledWith(expect.any(Function));
+    });
+
+    it('plays the round-resolution cue when settings sound is enabled', () => {
+      useSettingsStore.setState({ soundEnabled: true });
+      mockResolvedRound();
+
+      render(<Dashboard />);
+
+      expect(playRoundResolutionCue).toHaveBeenCalledWith(true);
+    });
+
+    it('does not play the round-resolution cue when settings sound is disabled', () => {
+      useSettingsStore.setState({ soundEnabled: false });
+      mockResolvedRound();
+
+      render(<Dashboard />);
+
+      expect(playRoundResolutionCue).not.toHaveBeenCalled();
+    });
+
+    it('never writes the legacy xelma_round_sound localStorage key', () => {
+      useSettingsStore.setState({ soundEnabled: true });
+      mockResolvedRound();
+
+      render(<Dashboard />);
+
+      expect(localStorage.getItem('xelma_round_sound')).toBeNull();
+    });
+
+    it('does not render an ad-hoc round sound toggle', () => {
+      render(<Dashboard />);
+      expect(screen.queryByText('Round sound')).not.toBeInTheDocument();
+    });
+  });
+
   describe('initialization', () => {
     it('fetches active round on mount', () => {
       render(<Dashboard />);
@@ -443,4 +704,147 @@ describe('Dashboard', () => {
       expect(modal).toHaveAttribute('data-open', 'false');
     });
   });
+
+  describe('optimistic pending prediction row (issue #615)', () => {
+    it('shows a pending row in Recent Predictions immediately, without waiting for an API refetch', async () => {
+      render(<Dashboard />);
+      // Let the on-mount fetchActivities/fetchStats settle before recording
+      // the baseline call count.
+      await act(async () => {});
+      const callsBeforePending = vi.mocked(predictionsApi.getUserHistory).mock.calls.length;
+
+      fireEvent.click(screen.getByTestId('submit-prediction'));
+      fireEvent.click(screen.getByTestId('pending-bet-modal'));
+
+      expect(screen.getByText('Pending...')).toBeInTheDocument();
+      // The row appeared purely from local state — no additional history
+      // fetch was triggered to produce it.
+      expect(predictionsApi.getUserHistory).toHaveBeenCalledTimes(callsBeforePending);
+    });
+
+    it('does not show a duplicate row once the history refetch after success returns the confirmed prediction', async () => {
+      vi.mocked(predictionsApi.getUserHistory).mockResolvedValue([]);
+      render(<Dashboard />);
+
+      fireEvent.click(screen.getByTestId('submit-prediction'));
+      fireEvent.click(screen.getByTestId('pending-bet-modal'));
+      expect(screen.getByText('Pending...')).toBeInTheDocument();
+
+      // The confirmed prediction is now what the API returns on refetch.
+      vi.mocked(predictionsApi.getUserHistory).mockResolvedValue([
+        { id: 'optimistic-1', asset: 'BTC', mode: 'updown', stake: 10, isWin: true },
+      ] as never);
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('success-bet-modal'));
+      });
+
+      // Only one row for this prediction: the optimistic "Pending..." row is
+      // gone, replaced by exactly one confirmed row, not both at once.
+      expect(screen.queryByText('Pending...')).not.toBeInTheDocument();
+      const activityList = screen.getByRole('heading', { name: 'Recent Predictions' })
+        .closest('section')!;
+      expect(within(activityList).getAllByRole('listitem')).toHaveLength(1);
+      expect(within(activityList).getByText('Correct')).toBeInTheDocument();
+    });
+
+    it('marks the row failed on the error path, and removes it once the modal is dismissed', () => {
+      render(<Dashboard />);
+
+      fireEvent.click(screen.getByTestId('submit-prediction'));
+      fireEvent.click(screen.getByTestId('pending-bet-modal'));
+      expect(screen.getByText('Pending...')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId('error-bet-modal'));
+      expect(screen.getByText('Failed')).toBeInTheDocument();
+      expect(screen.queryByText('Pending...')).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId('close-bet-modal'));
+      expect(screen.queryByText('Failed')).not.toBeInTheDocument();
+    });
+  });
+
+  describe('localization', () => {
+    it('renders Spanish wallet prompt and share button when locale is changed to es', async () => {
+      vi.mocked(useWalletStore).mockImplementation(((selector: unknown) => {
+        const store = { ...mockWalletStore, status: 'idle', publicKey: null };
+        return selectFromStore(selector, store);
+      }) as never);
+
+      await i18n.changeLanguage('es');
+
+      render(<Dashboard />);
+
+      expect(screen.getByTestId('dashboard-wallet-prompt')).toHaveTextContent(
+        'Conecta tu cartera para enviar predicciones.'
+      );
+      expect(screen.getByTestId('dashboard-connect-now')).toHaveTextContent('Conectar ahora');
+      expect(screen.getByTestId('share-rounds-btn')).toHaveTextContent(/Compartir|dashboard\.share\.button/i);
+    });
+
+    it('renders Spanish empty state when no round is active', async () => {
+      vi.mocked(useRoundStore).mockImplementation((selector: any) => {
+        const store = { ...mockRoundStore, isRoundActive: false };
+        return typeof selector === 'function' ? selector(store) : store;
+      });
+
+      await i18n.changeLanguage('es');
+
+      render(<Dashboard />);
+
+      expect(screen.getByText(/No hay rondas activas|dashboard\.emptyState\.noActiveRounds\.title/i)).toBeInTheDocument();
+    });
+  });
+
+  describe('user stats panel', () => {
+    it('renders live stats when connected and API response succeeds', async () => {
+      vi.mocked(statsApi.getUserStats).mockResolvedValue({
+        balance: 999.5,
+        pendingWinnings: 50,
+        totalWins: 8,
+        totalLosses: 2,
+        currentStreak: 5,
+        xp: 1200,
+        rank: 'Analyst',
+      });
+
+      render(<Dashboard />);
+
+      expect(await screen.findByText('999.50 vXLM')).toBeInTheDocument();
+      expect(screen.getByText('5 rounds')).toBeInTheDocument();
+      expect(screen.getByText('8')).toBeInTheDocument();
+      expect(screen.getByText('2')).toBeInTheDocument();
+    });
+
+    it('renders empty state without mock numbers when connected and API returns null', async () => {
+      vi.mocked(statsApi.getUserStats).mockResolvedValue(null);
+
+      render(<Dashboard />);
+
+      expect(await screen.findByText('User stats unavailable')).toBeInTheDocument();
+      expect(screen.queryByText('1000 vXLM')).not.toBeInTheDocument();
+      expect(screen.queryByText('3 rounds')).not.toBeInTheDocument();
+    });
+
+    it('renders error state when connected and API call fails', async () => {
+      vi.mocked(statsApi.getUserStats).mockRejectedValue(new Error('Network failure'));
+
+      render(<Dashboard />);
+
+      expect(await screen.findByText('Network failure')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument();
+    });
+
+    it('does not render stats panel when wallet is disconnected', () => {
+      vi.mocked(useWalletStore).mockImplementation(((selector: unknown) => {
+        const store = { ...mockWalletStore, status: 'idle', publicKey: null };
+        return selectFromStore(selector, store);
+      }) as never);
+
+      render(<Dashboard />);
+
+      expect(screen.queryByText('Your Record')).not.toBeInTheDocument();
+    });
+  });
 });
+

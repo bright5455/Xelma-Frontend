@@ -13,16 +13,32 @@ export type MotionPreference = 'system' | 'reduce' | 'no-preference';
 export interface SettingsState {
   /** Whether to render the "Testnet / Mainnet" badge in the global navbar. */
   showNetworkBadge: boolean;
-  /** Master UI sound toggle. Currently used by future audio cues; safe to flip. */
+  /**
+   * Master UI sound toggle — single source of truth for every UI sound cue
+   * (the Settings "Test sound" tone and the dashboard round-resolution cue).
+   * Read via `audioController`'s `bindSoundPreference` binding so both cues
+   * stay in sync without each caller re-reading the store directly.
+   */
   soundEnabled: boolean;
-  /** Local UI mirror of `streamerMode` so the navbar / settings reflect it instantly. */
+  /**
+   * Local UI mirror of `streamerMode` so the navbar / settings reflect it
+   * instantly, without waiting on a profile save. `MaskedBalance` treats this
+   * as an OR with the persisted `useProfileStore` flag — either one being
+   * true hides balances; see the precedence note on `MaskedBalance`.
+   */
   streamerMode: boolean;
   /** Override for `prefers-reduced-motion`. See {@link MotionPreference}. */
   motionPreference: MotionPreference;
+  /**
+   * Dashboard density. `true` tightens padding and gaps on narrow screens.
+   * Shared by the Dashboard and Settings toggles so they stay in sync.
+   */
+  compactMode: boolean;
   setShowNetworkBadge: (value: boolean) => void;
   setSoundEnabled: (value: boolean) => void;
   setStreamerMode: (value: boolean) => void;
   setMotionPreference: (value: MotionPreference) => void;
+  setCompactMode: (value: boolean) => void;
   resetToDefaults: () => void;
 }
 
@@ -34,12 +50,14 @@ export const DEFAULT_SETTINGS: Omit<
   | 'setSoundEnabled'
   | 'setStreamerMode'
   | 'setMotionPreference'
+  | 'setCompactMode'
   | 'resetToDefaults'
 > = {
   showNetworkBadge: true,
   soundEnabled: false,
   streamerMode: false,
   motionPreference: 'system',
+  compactMode: false,
 };
 
 export const useSettingsStore = create<SettingsState>()(
@@ -50,6 +68,7 @@ export const useSettingsStore = create<SettingsState>()(
       setSoundEnabled: (value) => set({ soundEnabled: value }),
       setStreamerMode: (value) => set({ streamerMode: value }),
       setMotionPreference: (value) => set({ motionPreference: value }),
+      setCompactMode: (value) => set({ compactMode: value }),
       resetToDefaults: () => set({ ...DEFAULT_SETTINGS }),
     }),
     {
@@ -62,6 +81,7 @@ export const useSettingsStore = create<SettingsState>()(
         soundEnabled: state.soundEnabled,
         streamerMode: state.streamerMode,
         motionPreference: state.motionPreference,
+        compactMode: state.compactMode,
       }),
     },
   ),
@@ -74,3 +94,4 @@ export const selectShowNetworkBadge = (s: SettingsState) => s.showNetworkBadge;
 export const selectSoundEnabled = (s: SettingsState) => s.soundEnabled;
 export const selectStreamerMode = (s: SettingsState) => s.streamerMode;
 export const selectMotionPreference = (s: SettingsState) => s.motionPreference;
+export const selectCompactMode = (s: SettingsState) => s.compactMode;
