@@ -70,36 +70,6 @@ const ACCENT_STYLES = {
  * Polished 3-step onboarding section for the Landing page.
  * Displays Connect Freighter → Practice vXLM → Submit Prediction.
  */
-const STEPS = [
-  {
-    id: 'connect',
-    title: 'Connect Freighter',
-    description:
-      'Link your Freighter wallet in one click. Xelma never holds your keys — you sign everything yourself.',
-    icon: Wallet,
-    iconStyle: 'bg-xelma-blue/10 text-xelma-blue',
-    badgeStyle: 'border-xelma-blue/30 text-xelma-blue',
-  },
-  {
-    id: 'practice',
-    title: 'Practice vXLM',
-    description:
-      'Get free virtual XLM and learn the markets risk-free before you commit to a real prediction.',
-    icon: Coins,
-    iconStyle: 'bg-xelma-teal/10 text-xelma-teal',
-    badgeStyle: 'border-xelma-teal/30 text-xelma-teal',
-  },
-  {
-    id: 'predict',
-    title: 'Submit prediction',
-    description:
-      'Pick UP or DOWN, or a narrow price range, and submit. Your prediction is recorded on-chain and settles automatically.',
-    icon: Send,
-    iconStyle: 'bg-xelma-teal-bright/10 text-xelma-teal-bright',
-    badgeStyle: 'border-xelma-teal-bright/30 text-xelma-teal-bright',
-  },
-] as const;
-
 export default function HowItWorks() {
   const { t } = useTranslation();
 
